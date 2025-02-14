@@ -72,17 +72,21 @@ static uint8_t keymap_layer_orders[ZMK_KEYMAP_LAYERS_LEN];
 
 #endif // IS_ENABLED(CONFIG_ZMK_KEYMAP_LAYER_REORDERING)
 
-#define KEYMAP_VAR(_name, _opts)                                                                   \
+#define KEYMAP_VAR(_name, _opts, no_init)                                                          \
     static _opts struct zmk_behavior_binding _name[ZMK_KEYMAP_LAYERS_LEN][ZMK_KEYMAP_LEN] = {      \
-        COND_CODE_1(IS_ENABLED(CONFIG_ZMK_STUDIO),                                                 \
-                    (DT_INST_FOREACH_CHILD_SEP(0, TRANSFORMED_LAYER, (, ))),                       \
-                    (DT_INST_FOREACH_CHILD_STATUS_OKAY_SEP(0, TRANSFORMED_LAYER, (, ))))};
+        COND_CODE_0(                                                                               \
+            no_init,                                                                               \
+            (COND_CODE_1(IS_ENABLED(CONFIG_ZMK_STUDIO),                                            \
+                         (DT_INST_FOREACH_CHILD_SEP(0, TRANSFORMED_LAYER, (, ))),                  \
+                         (DT_INST_FOREACH_CHILD_STATUS_OKAY_SEP(0, TRANSFORMED_LAYER, (, ))))),    \
+            (0))};
 
-KEYMAP_VAR(zmk_keymap, COND_CODE_1(IS_ENABLED(CONFIG_ZMK_KEYMAP_SETTINGS_STORAGE), (), (const)))
+KEYMAP_VAR(zmk_keymap, COND_CODE_1(IS_ENABLED(CONFIG_ZMK_KEYMAP_SETTINGS_STORAGE), (), (const)),
+           IS_ENABLED(CONFIG_ZMK_STUDIO))
 
 #if IS_ENABLED(CONFIG_ZMK_KEYMAP_SETTINGS_STORAGE)
 
-KEYMAP_VAR(zmk_stock_keymap, const)
+KEYMAP_VAR(zmk_stock_keymap, const, 0)
 
 static char zmk_keymap_layer_names[ZMK_KEYMAP_LAYERS_LEN][CONFIG_ZMK_KEYMAP_LAYER_NAME_MAX_LEN] = {
     DT_INST_FOREACH_CHILD_SEP(0, LAYER_NAME, (, ))};
@@ -294,7 +298,7 @@ int zmk_keymap_set_layer_binding_at_idx(zmk_keymap_layer_id_t layer_id, uint8_t 
 
     uint8_t *pending = zmk_keymap_layer_pending_changes[layer_id];
 
-    WRITE_BIT(pending[binding_idx / 8], binding_idx % 8, 1);
+    WRITE_BIT(pending[storage_binding_idx / 8], storage_binding_idx % 8, 1);
 
     // TODO: Need a mutex to protect access to the keymap data?
     memcpy(&zmk_keymap[layer_id][storage_binding_idx], &binding, sizeof(binding));
@@ -483,10 +487,11 @@ static int save_bindings(void) {
 
         for (int kp = 0; kp < ZMK_KEYMAP_LEN; kp++) {
             if (pending[kp / 8] & BIT(kp % 8)) {
-                LOG_DBG("Pending save for layer %d at key position %d", l, kp);
 
-                const struct zmk_behavior_binding *binding =
-                    zmk_keymap_get_layer_binding_at_idx(l, kp);
+                const struct zmk_behavior_binding *binding = &zmk_keymap[l][kp];
+                LOG_DBG("Pending save for layer %d at key position %d: %s with %d, %d", l, kp,
+                        binding->behavior_dev, binding->param1, binding->param2);
+
                 struct zmk_behavior_binding_setting binding_setting = {
                     .behavior_local_id = zmk_behavior_get_local_id(binding->behavior_dev),
                     .param1 = binding->param1,
@@ -512,10 +517,10 @@ static int save_bindings(void) {
                     LOG_ERR("Failed to save keymap binding at %d on layer %d (%d)", l, kp, ret);
                     return ret;
                 }
+
+                WRITE_BIT(pending[kp / 8], kp % 8, 0);
             }
         }
-
-        *pending = 0;
     }
 
     return 0;
@@ -953,6 +958,9 @@ SETTINGS_STATIC_HANDLER_DEFINE(keymap, "keymap", NULL, keymap_handle_set, keymap
 int keymap_init(void) {
 #if IS_ENABLED(CONFIG_ZMK_KEYMAP_LAYER_REORDERING)
     load_stock_keymap_layer_ordering();
+#endif
+#if IS_ENABLED(CONFIG_ZMK_STUDIO)
+    reload_from_stock_keymap();
 #endif
 
     return 0;
